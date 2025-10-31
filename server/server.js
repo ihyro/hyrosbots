@@ -6,14 +6,16 @@ import cookieSession from "cookie-session";
 import Stripe from "stripe";
 
 dotenv.config();
+const app = express();
 
+// Middleware
+app.use(express.json());
 app.use(
   cors({
-    origin: process.env.CLIENT_ORIGIN, // fallback kaldırıldı
+    origin: process.env.CLIENT_ORIGIN,
     credentials: true,
   })
 );
-
 
 app.use(
   cookieSession({
@@ -24,7 +26,7 @@ app.use(
   })
 );
 
-// basit in-memory "abonelik" saklama
+// Basit in-memory "abonelik" depolama
 const purchases = new Map(); // key: userId, value: array of {botId, ts}
 
 // --- Discord OAuth2 ---
@@ -40,21 +42,19 @@ function discordAuthorizeURL() {
     scope: "identify",
     prompt: "consent",
   });
-  
-  // Discord OAuth2 URL'sini burada doğrudan yazıyoruz
-  return `https://discord.com/api/oauth2/authorize?${p.toString()}`;
+
+  return `${DISCORD_AUTH_URL}?${p.toString()}`;
 }
 
-
-// 1) Frontend login-url
+// --- 1) Frontend login URL ---
 app.get("/api/auth/login-url", (_req, res) => {
   res.json({ url: discordAuthorizeURL() });
 });
 
-// 2) Callback
-app.get("/api/auth/callback", async (req, res) => {
+// --- 2) Discord callback ---
+app.get("/api/auth/discord/callback", async (req, res) => {
   const code = req.query.code;
-  if (!code) return res.status(400).send("no code");
+  if (!code) return res.status(400).send("No code provided");
 
   try {
     const params = new URLSearchParams({
@@ -83,30 +83,32 @@ app.get("/api/auth/callback", async (req, res) => {
         : null,
     };
 
-    res.redirect((process.env.CLIENT_ORIGIN || "http://localhost:3000") + "/auth/success");
+    res.redirect(`${process.env.CLIENT_ORIGIN}/auth/success`);
   } catch (err) {
-    console.error(err?.response?.data || err.message);
-    res.redirect((process.env.CLIENT_ORIGIN || "http://localhost:3000") + "/auth/error");
+    console.error("Discord OAuth Error:", err?.response?.data || err.message);
+    res.redirect(`${process.env.CLIENT_ORIGIN}/auth/error`);
   }
 });
 
+// --- 3) Kimlik doğrulama kontrolü ---
 app.get("/api/auth/me", (req, res) => {
   res.json({ user: req.session.user || null });
 });
 
+// --- 4) Çıkış ---
 app.post("/api/auth/logout", (req, res) => {
   req.session = null;
   res.json({ ok: true });
 });
 
-// --- Abonelik listeleme ---
+// --- 5) Abonelik listeleme ---
 app.get("/api/subscriptions", (req, res) => {
   if (!req.session.user) return res.status(401).json({ error: "unauthorized" });
   const list = purchases.get(req.session.user.id) || [];
   res.json({ items: list });
 });
 
-// --- Checkout ---
+// --- 6) Stripe Checkout ---
 const stripeKey = process.env.STRIPE_SECRET || "";
 const stripe = stripeKey ? new Stripe(stripeKey) : null;
 const CURRENCY = (process.env.CURRENCY || "try").toLowerCase();
@@ -116,11 +118,10 @@ app.post("/api/checkout", async (req, res) => {
   const { botId } = req.body || {};
   if (!botId) return res.status(400).json({ error: "botId required" });
 
-  const origin = process.env.CLIENT_ORIGIN || "https://hyrosbots.vercel.app/";
+  const origin = process.env.CLIENT_ORIGIN || "https://hyrosbots.vercel.app";
 
   // DEMO modu (Stripe yoksa)
   if (!stripe) {
-    // demo: satın alındı say
     if (req.session?.user?.id) {
       const arr = purchases.get(req.session.user.id) || [];
       arr.push({ botId, ts: Date.now(), mode: "demo" });
@@ -129,7 +130,7 @@ app.post("/api/checkout", async (req, res) => {
     return res.json({ url: `${origin}/thank-you?bot=${botId}` });
   }
 
-  // Stripe modu
+  // Stripe ödeme işlemi
   try {
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
@@ -138,9 +139,7 @@ app.post("/api/checkout", async (req, res) => {
         {
           price_data: {
             currency: CURRENCY,
-            product_data: {
-              name: `Kaan's Discord Bot: ${botId}`,
-            },
+            product_data: { name: `Kaan's Discord Bot: ${botId}` },
             unit_amount: PRICE_AMOUNT,
           },
           quantity: 1,
@@ -161,31 +160,4 @@ app.post("/api/checkout", async (req, res) => {
   }
 });
 
-// Stripe success doğrulama (client thank-you sayfasından çağrılır)
-app.get("/api/checkout/confirm", async (req, res) => {
-  if (!stripe) return res.json({ ok: true, mode: "demo" });
-
-  const session_id = req.query.session_id;
-  if (!session_id) return res.status(400).json({ error: "session_id required" });
-
-  try {
-    const session = await stripe.checkout.sessions.retrieve(session_id);
-    if (session.payment_status === "paid") {
-      const botId = session.metadata?.botId || "unknown";
-      const userId = (req.session?.user?.id) || session.metadata?.userId || "guest";
-      const arr = purchases.get(userId) || [];
-      arr.push({ botId, ts: Date.now(), mode: "stripe" });
-      purchases.set(userId, arr);
-      return res.json({ ok: true });
-    }
-    return res.status(400).json({ error: "not_paid" });
-  } catch (e) {
-    console.error(e.message);
-    res.status(500).json({ error: "confirm_failed" });
-  }
-});
-
-const PORT = process.env.PORT || 5174;
-app.listen(PORT, () => {
-  console.log("server running on :" + PORT);
-});
+// --- 7) Stripe S
