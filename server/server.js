@@ -114,7 +114,7 @@ app.post("/api/checkout", async (req, res) => {
   const { botId } = req.body || {};
   if (!botId) return res.status(400).json({ error: "botId required" });
 
-  const origin = process.env.CLIENT_ORIGIN || "http://localhost:3000";
+  const origin = process.env.CLIENT_ORIGIN || "https://hyrosbots.vercel.app/";
 
   // DEMO modu (Stripe yoksa)
   if (!stripe) {
