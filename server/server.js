@@ -8,7 +8,7 @@ import Stripe from "stripe";
 dotenv.config();
 const app = express();
 
-// Middleware
+// === Middleware ===
 app.use(express.json());
 app.use(
   cors({
@@ -42,7 +42,6 @@ function discordAuthorizeURL() {
     scope: "identify",
     prompt: "consent",
   });
-
   return `${DISCORD_AUTH_URL}?${p.toString()}`;
 }
 
@@ -53,8 +52,15 @@ app.get("/api/auth/login-url", (_req, res) => {
 
 // --- 2) Discord callback ---
 app.get("/api/auth/discord/callback", async (req, res) => {
+  console.log("CALLBACK HIT ✅");
+  console.log("CLIENT_ORIGIN:", process.env.CLIENT_ORIGIN);
+  console.log("DISCORD_REDIRECT_URI:", process.env.DISCORD_REDIRECT_URI);
+
   const code = req.query.code;
-  if (!code) return res.status(400).send("No code provided");
+  if (!code) {
+    console.error("No code provided in callback");
+    return res.status(400).send("No code provided");
+  }
 
   try {
     const params = new URLSearchParams({
@@ -83,10 +89,13 @@ app.get("/api/auth/discord/callback", async (req, res) => {
         : null,
     };
 
-    res.redirect(`${process.env.CLIENT_ORIGIN}/auth/success`);
+    // CLIENT_ORIGIN okunamazsa fallback ile düzeltelim:
+    const redirectBase = process.env.CLIENT_ORIGIN || "https://hyrosbots.vercel.app";
+    res.redirect(`${redirectBase}/auth/success`);
   } catch (err) {
     console.error("Discord OAuth Error:", err?.response?.data || err.message);
-    res.redirect(`${process.env.CLIENT_ORIGIN}/auth/error`);
+    const redirectBase = process.env.CLIENT_ORIGIN || "https://hyrosbots.vercel.app";
+    res.redirect(`${redirectBase}/auth/error`);
   }
 });
 
@@ -160,4 +169,32 @@ app.post("/api/checkout", async (req, res) => {
   }
 });
 
-// --- 7) Stripe S
+// --- 7) Stripe Success doğrulama ---
+app.get("/api/checkout/confirm", async (req, res) => {
+  if (!stripe) return res.json({ ok: true, mode: "demo" });
+
+  const session_id = req.query.session_id;
+  if (!session_id) return res.status(400).json({ error: "session_id required" });
+
+  try {
+    const session = await stripe.checkout.sessions.retrieve(session_id);
+    if (session.payment_status === "paid") {
+      const botId = session.metadata?.botId || "unknown";
+      const userId = req.session?.user?.id || session.metadata?.userId || "guest";
+      const arr = purchases.get(userId) || [];
+      arr.push({ botId, ts: Date.now(), mode: "stripe" });
+      purchases.set(userId, arr);
+      return res.json({ ok: true });
+    }
+    return res.status(400).json({ error: "not_paid" });
+  } catch (e) {
+    console.error(e.message);
+    res.status(500).json({ error: "confirm_failed" });
+  }
+});
+
+// --- Server başlat ---
+const PORT = process.env.PORT || 5174;
+app.listen(PORT, () => {
+  console.log("Server running on port " + PORT);
+});
