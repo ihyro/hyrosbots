@@ -7,14 +7,13 @@ import Stripe from "stripe";
 
 dotenv.config();
 
-const app = express();
-app.use(express.json());
 app.use(
   cors({
-    origin: process.env.CLIENT_ORIGIN || "http://localhost:3000",
+    origin: process.env.CLIENT_ORIGIN, // fallback kaldırıldı
     credentials: true,
   })
 );
+
 
 app.use(
   cookieSession({
@@ -41,8 +40,11 @@ function discordAuthorizeURL() {
     scope: "identify",
     prompt: "consent",
   });
-  return `${DISCORD_AUTH_URL}?${p.toString()}`;
+  
+  // Discord OAuth2 URL'sini burada doğrudan yazıyoruz
+  return `https://discord.com/api/oauth2/authorize?${p.toString()}`;
 }
+
 
 // 1) Frontend login-url
 app.get("/api/auth/login-url", (_req, res) => {
